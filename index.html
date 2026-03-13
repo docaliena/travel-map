@@ -587,7 +587,7 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:#0e0b07;overfl
 .mob-panel-tab{display:none;position:absolute;bottom:0;left:50%;transform:translateX(-50%);z-index:999;background:#1a1610;border:1.5px solid rgba(200,150,10,.35);border-bottom:none;border-radius:10px 10px 0 0;padding:6px 20px 4px;font-size:12px;font-weight:700;color:rgba(245,237,214,.7);cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap;-webkit-tap-highlight-color:transparent}
 
 /* Modal full-width on mobile */
-@media(max-width:640px){
+@media(max-width:640px),(max-height:430px) and (pointer:coarse){
   /* ── App layout ── */
   html,body{overflow:hidden;height:100%;height:100dvh}
   .app{height:100dvh}
@@ -683,7 +683,8 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:#0e0b07;overfl
 }
 
 /* Landscape phone */
-@media(max-width:640px) and (orientation:landscape){
+@media(max-height:430px) and (pointer:coarse),
+(max-width:640px) and (orientation:landscape){
   .panel{height:60vh;max-height:60vh}
   .panel.mob-expanded{height:60vh}
   #map{min-height:40vh}
@@ -4887,7 +4888,15 @@ document.getElementById('map')?.addEventListener('click',hideR);
 // MOBILE — Panel swipe, long press, touch helpers
 // ════════════════════════════════════════════════════════════
 
-const isMobile = () => window.innerWidth <= 640;
+// Telefon/tablet tespiti — genişliğe değil, touch kabiliyetine bak
+// Yatay çevirmede window.innerWidth > 640 olur ama hâlâ telefondur
+const isMobile = () => {
+  if('ontouchstart' in window || navigator.maxTouchPoints > 0){
+    // Touch cihaz — kısa kenarı 640'tan küçükse telefon
+    return Math.min(window.innerWidth, window.innerHeight) <= 640;
+  }
+  return window.innerWidth <= 640;
+};
 
 // ── Panel collapse / expand ──────────────────────────────────
 let panelState = 'half'; // 'collapsed' | 'half' | 'expanded'
@@ -5048,15 +5057,35 @@ function openPinModal(ll, addr, name, emoji, wiki){
 }
 
 // ── Resize handler ───────────────────────────────────────────
+// Telefon mu? Genişlikten değil, touch kabiliyetinden anla — yatay çevirmede yanılmaz
+const isTouchDevice = () => ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
 window.addEventListener('resize', () => {
-  updateMobFabPos();
-  if(!isMobile()){
+  const panel = document.getElementById('panel-el');
+  if(!panel) return;
+
+  if(isTouchDevice()){
+    // Telefon/tablet — yatay/dikey her durumda panel'i koru
+    // Sadece inline height'ı sıfırla, CSS class'lar state'i tutar
+    panel.style.height = '';
+    updateMobFabPos();
+  } else {
+    // Gerçek masaüstü — mobile class'ları kaldır
+    panel.classList.remove('mob-collapsed','mob-expanded');
+    panel.style.height = '';
+  }
+});
+
+// Orientation change — kısa gecikmeyle yeniden hesapla
+window.addEventListener('orientationchange', () => {
+  setTimeout(() => {
     const panel = document.getElementById('panel-el');
     if(panel){
-      panel.classList.remove('mob-collapsed','mob-expanded');
-      panel.style.height = '';
+      panel.style.height = '';  // snap'i CSS'e bırak
     }
-  }
+    updateMobFabPos();
+    if(map) map.invalidateSize();  // Leaflet haritayı yeniden boyutlandır
+  }, 300);
 });
 
 // ── Init mobile features after map ready ────────────────────
