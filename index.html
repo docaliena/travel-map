@@ -2054,27 +2054,72 @@ function exportJSON(){
   const fileName = `gezi-harita-${firstCity.toLowerCase().replace(/\s+/g,'-')}-${new Date().toISOString().slice(0,10)}.json`;
   const blob = new Blob([jsonStr], {type:'application/json'});
 
-  // iOS Safari: Web Share API ile paylaş (Dosyalar / WhatsApp / Notes vs.)
-  if(navigator.share && navigator.canShare){
+  // 1) Web Share API ile dosya paylaş (iOS 15+ HTTPS'te çalışır)
+  if(location.protocol==='https:' && navigator.share && navigator.canShare){
     const file = new File([blob], fileName, {type:'application/json'});
     if(navigator.canShare({files:[file]})){
       navigator.share({files:[file], title:'Gezi Haritam Yedeği'})
         .then(()=> toast('📦 Paylaşıldı!'))
-        .catch(()=> _exportJSONFallback(blob, fileName));
+        .catch(()=> _exportJSONFallback(blob, fileName, jsonStr));
       return;
     }
   }
-  // Masaüstü / Android: normal indirme
-  _exportJSONFallback(blob, fileName);
+  // 2) Normal indirme (masaüstü / Android)
+  _exportJSONFallback(blob, fileName, jsonStr);
 }
-function _exportJSONFallback(blob, fileName){
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
-  toast('📦 JSON yedek indirildi');
+
+function _exportJSONFallback(blob, fileName, jsonStr){
+  // Önce normal download dene
+  try{
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
+    toast('📦 JSON indirildi');
+  } catch(e){
+    // İndirme çalışmazsa (bazı iOS file:// senaryoları) kopyalama modalı göster
+    _showExportCopyModal(jsonStr, fileName);
+  }
+}
+
+function _showExportCopyModal(jsonStr, fileName){
+  // Var olan modalı temizle
+  const existing = document.getElementById('exportCopyModal');
+  if(existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'exportCopyModal';
+  modal.className = 'modal-bg';
+  modal.style.cssText = 'display:flex;z-index:19999';
+  modal.innerHTML = `
+    <div class="modal" style="width:340px">
+      <div class="mhdr">
+        <div><div class="msub">Dışa Aktar</div><h3>📦 JSON Yedek</h3></div>
+        <button class="mcls" onclick="document.getElementById('exportCopyModal').remove()">✕</button>
+      </div>
+      <div class="mbody">
+        <div style="font-size:10px;color:rgba(245,237,214,.4);margin-bottom:6px">
+          Aşağıdaki metni kopyala ve <b>${fileName}</b> adıyla bir .json dosyasına kaydet.
+        </div>
+        <textarea id="exportJsonText" style="width:100%;height:160px;font-size:9px;font-family:monospace;background:rgba(0,0,0,.3);border:1px solid rgba(200,150,10,.2);border-radius:4px;color:rgba(245,237,214,.7);padding:8px;resize:none" readonly>${jsonStr.substring(0,3000)}${jsonStr.length>3000?'\n... (kısaltıldı)':''}</textarea>
+        <button class="bok" style="width:100%;margin-top:8px" onclick="
+          navigator.clipboard.writeText(document.getElementById('exportJsonText').value)
+            .then(()=>{ toast('📋 Panoya kopyalandı!'); })
+            .catch(()=>{ document.getElementById('exportJsonText').select(); document.execCommand('copy'); toast('📋 Seçildi — kopyala'); });
+        ">📋 Panoya Kopyala</button>
+        <div style="font-size:9px;color:rgba(245,237,214,.3);margin-top:8px;text-align:center">
+          💡 GitHub Pages üzerinden kullanırsan indirme otomatik çalışır.
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  // Select all on tap
+  setTimeout(()=>{
+    const ta = document.getElementById('exportJsonText');
+    if(ta){ ta.focus(); ta.select(); }
+  }, 100);
 }
 function clearCityPins(){
   if(!confirm(`${city().name} şehrindeki tüm yerler silinsin mi?`)) return;
@@ -5036,63 +5081,79 @@ let _touchOriginEl = null;  // original kpin element
 let _touchLastCol  = null;  // kday-col element currently over
 
 function initKanbanTouchDrag(){
-  // Event delegation on kbPanel — works after every renderKanban()
   const panel = document.getElementById('kbPanel');
   if(!panel || panel._touchDragInit) return;
   panel._touchDragInit = true;
 
+  let lpTimer = null;
+  let lpStartX = 0, lpStartY = 0;
+  let lpKpin = null, lpPin = null;
+
   panel.addEventListener('touchstart', e => {
     const kpin = e.target.closest('.kpin');
     if(!kpin) return;
-    // Don't block short taps — wait 300ms
     const id = kpin.id.replace('kpin-','');
     const p  = city().pins.find(x=>x.id===id);
     if(!p) return;
 
-    let longPressTimer = setTimeout(()=>{
-      longPressTimer = null;
-      _startTouchDrag(e, kpin, p);
-    }, 280);
+    // Capture coords immediately — e.touches becomes stale after timeout
+    const t = e.touches[0];
+    lpStartX = t.clientX;
+    lpStartY = t.clientY;
+    lpKpin = kpin;
+    lpPin  = p;
 
-    kpin._cancelLP = () => { clearTimeout(longPressTimer); longPressTimer=null; };
-    kpin.addEventListener('touchend',  kpin._cancelLP, {once:true});
-    kpin.addEventListener('touchmove', kpin._cancelLP, {once:true, passive:true});
+    lpTimer = setTimeout(()=>{
+      lpTimer = null;
+      _startTouchDrag(lpStartX, lpStartY, lpKpin, lpPin);
+    }, 400);
   }, {passive:true});
 
   panel.addEventListener('touchmove', e => {
+    const t = e.touches[0];
+
+    // Cancel long-press only if finger moved significantly before drag started
+    if(lpTimer){
+      const dx = t.clientX - lpStartX;
+      const dy = t.clientY - lpStartY;
+      if(Math.sqrt(dx*dx + dy*dy) > 8){
+        clearTimeout(lpTimer); lpTimer=null; lpKpin=null; lpPin=null;
+      }
+      return;
+    }
+
     if(!_touchDragPin) return;
     e.preventDefault();
-    const t = e.touches[0];
     _moveTouchGhost(t.clientX, t.clientY);
     _highlightCol(t.clientX, t.clientY);
   }, {passive:false});
 
   panel.addEventListener('touchend', e => {
+    if(lpTimer){ clearTimeout(lpTimer); lpTimer=null; }
     if(!_touchDragPin) return;
     const t = e.changedTouches[0];
     _dropTouchDrag(t.clientX, t.clientY);
   });
 
-  panel.addEventListener('touchcancel', () => _cancelTouchDrag());
+  panel.addEventListener('touchcancel', () => {
+    if(lpTimer){ clearTimeout(lpTimer); lpTimer=null; }
+    _cancelTouchDrag();
+  });
 }
 
-function _startTouchDrag(e, kpinEl, p){
+function _startTouchDrag(x, y, kpinEl, p){
   _touchDragPin  = p;
   _touchOriginEl = kpinEl;
   kpinEl.classList.add('touch-dragging');
 
-  // Vibrate on drag start
   if(navigator.vibrate) navigator.vibrate(25);
 
-  // Create ghost
   const ghost = document.createElement('div');
   ghost.className = 'kpin-drag-ghost';
   ghost.innerHTML = `<span style="font-size:16px">${p.emoji}</span><span>${p.name}</span>`;
   document.body.appendChild(ghost);
   _touchGhost = ghost;
-
-  const t = e.touches[0];
-  _moveTouchGhost(t.clientX, t.clientY);
+  _moveTouchGhost(x, y);
 }
 
 function _moveTouchGhost(x, y){
