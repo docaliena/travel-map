@@ -2193,14 +2193,30 @@ async function computeCustomRoute(){
   const url = `https://router.project-osrm.org/route/v1/foot/${coords}?overview=full&geometries=geojson&steps=false`;
   try{
     const res = await fetch(url);
-    if(!res.ok) throw new Error(res.status);
+    if(!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+
+    // OSRM başarı kodu kontrolü
+    if(data.code !== 'Ok' || !data.routes?.[0]) throw new Error('NoRoute');
+
     const route = data.routes[0];
-    const legs = customRoute.slice(0,-1).map((p,i)=>({
+
+    // Waypoint snap doğrulaması — OSRM bazen denize/çok uzağa snap'ler
+    // Snap mesafesi 1km'den fazlaysa güvenilmez sayıp düz çizgi çiz
+    const waypoints = data.waypoints || [];
+    const tooFarSnap = waypoints.some((wp, i) => {
+      const orig = customRoute[i];
+      if(!orig || !wp.location) return false;
+      const snapDist = haversine(orig.lat, orig.lng, wp.location[1], wp.location[0]);
+      return snapDist > 1000; // 1km'den fazla snap → güvenilmez
+    });
+    if(tooFarSnap) throw new Error('SnapTooFar');
+
+    const legs = customRoute.slice(0,-1).map((p,i) => ({
       from: p.name,
       to:   customRoute[i+1].name,
-      dist: formatDist(data.routes[0].legs[i]?.distance||0),
-      time: formatTime(data.routes[0].legs[i]?.duration||0),
+      dist: formatDist(data.routes[0].legs[i]?.distance || 0),
+      time: formatTime(data.routes[0].legs[i]?.duration || 0),
       straight: false
     }));
     customRouteResult = {
@@ -2211,26 +2227,39 @@ async function computeCustomRoute(){
     };
     drawCustomRouteLayer(route.geometry.coordinates, false);
   } catch(e){
-    // straight-line fallback
-    let total=0;
-    const legs = customRoute.slice(0,-1).map((p,i)=>{
-      const d=haversine(p.lat,p.lng,customRoute[i+1].lat,customRoute[i+1].lng);
-      total+=d;
-      return {from:p.name,to:customRoute[i+1].name,dist:formatDist(d)+'*',time:formatTime(d/1.2)+'*',straight:true};
+    // Düz çizgi fallback — her zaman doğru koordinatlarda
+    let total = 0;
+    const legs = customRoute.slice(0,-1).map((p,i) => {
+      const d = haversine(p.lat, p.lng, customRoute[i+1].lat, customRoute[i+1].lng);
+      total += d;
+      return {from:p.name, to:customRoute[i+1].name, dist:formatDist(d)+'*', time:formatTime(d/1.2)+'*', straight:true};
     });
-    customRouteResult = {totalDist:formatDist(total)+'*',totalTime:formatTime(total/1.2)+'*',legs,straight:true};
-    drawCustomRouteLayer(customRoute.map(p=>[p.lng,p.lat]), true);
+    customRouteResult = {
+      totalDist: formatDist(total)+'*',
+      totalTime: formatTime(total/1.2)+'*',
+      legs, straight:true
+    };
+    // Düz çizgi: pin koordinatlarını direkt kullan (lng,lat GeoJSON formatı)
+    drawCustomRouteLayer(customRoute.map(p => [p.lng, p.lat]), true);
   }
   renderPanel();
 }
 
 function drawCustomRouteLayer(geojsonCoords, straight){
   if(customRouteLayer){ map.removeLayer(customRouteLayer); }
-  const lls = geojsonCoords.map(c=>[c[1],c[0]]);
+  const lls = geojsonCoords.map(c=>[c[1],c[0]]);  // GeoJSON [lng,lat] → Leaflet [lat,lng]
   customRouteLayer = L.layerGroup().addTo(map);
-  L.polyline(lls,{color:'#C8960A',weight:straight?3:5,opacity:straight?0.55:0.85,
-    dashArray:straight?'8,6':null,lineCap:'round',lineJoin:'round'}).addTo(customRouteLayer);
-  // Numbered waypoint circles
+  const line = L.polyline(lls,{
+    color:'#C8960A', weight:straight?3:5,
+    opacity:straight?0.55:0.85,
+    dashArray:straight?'8,6':null,
+    lineCap:'round', lineJoin:'round'
+  }).addTo(customRouteLayer);
+
+  // Haritayı rotaya odakla
+  try{ map.fitBounds(line.getBounds(), {padding:[60,60], maxZoom:15, animate:true}); } catch(e){}
+
+  // Numbered waypoint circles — her zaman pin koordinatlarında
   customRoute.forEach((p,i)=>{
     L.circleMarker([p.lat,p.lng],{radius:10,fillColor:'#C8960A',color:'#fff',weight:2,fillOpacity:1})
       .bindTooltip(`${i+1}. ${p.name}`,{permanent:false,direction:'top'})
