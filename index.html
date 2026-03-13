@@ -4188,8 +4188,25 @@ function openSettings(){
   document.getElementById('settings-ak').value    = ANTHROPIC_KEY || localStorage.getItem('gzmap_setup') && JSON.parse(localStorage.getItem('gzmap_setup')).ak || '';
   document.getElementById('settings-jk').value    = API_KEY || '';
   document.getElementById('settings-uname').value = USERNAME || '';
+  // Paylaşma kodunu göster
+  const shareRow  = document.getElementById('settingsShareRow');
+  const shareCode = document.getElementById('settingsShareCode');
+  if(BIN_ID && shareRow && shareCode){
+    shareCode.textContent = BIN_ID;
+    shareRow.style.display = 'block';
+  } else if(shareRow){
+    shareRow.style.display = 'none';
+  }
   document.getElementById('settingsModal').classList.add('open');
   document.getElementById('settingsOverlay').classList.add('open');
+}
+
+function copySettingsCode(){
+  const code = document.getElementById('settingsShareCode')?.textContent;
+  if(!code) return;
+  navigator.clipboard?.writeText(code)
+    .then(()=> toast('📋 Kod kopyalandı!'))
+    .catch(()=>{ /* fallback */ const el=document.getElementById('settingsShareCode'); const r=document.createRange(); r.selectNode(el); window.getSelection().removeAllRanges(); window.getSelection().addRange(r); document.execCommand('copy'); toast('📋 Kopyalandı'); });
 }
 function closeSettings(){
   document.getElementById('settingsModal').classList.remove('open');
@@ -5271,6 +5288,15 @@ function _cancelTouchDrag(){
         <label>JSONBin API Anahtarı</label>
         <input class="settings-input" id="settings-jk" type="password" placeholder="Paylaşmak için gir…" autocomplete="off">
         <div class="settings-hint">Arkadaşlarınla paylaşmak için: <a href="https://jsonbin.io" target="_blank" style="color:rgba(200,150,10,.6)">jsonbin.io</a> → Master Key</div>
+      </div>
+      <!-- Paylaşma kodu — her zaman görünür, mobilde özellikle önemli -->
+      <div class="settings-row" id="settingsShareRow" style="display:none">
+        <label>Paylaşma Kodu (Bin ID)</label>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+          <code id="settingsShareCode" style="flex:1;background:rgba(200,150,10,.08);border:1px solid rgba(200,150,10,.25);border-radius:4px;padding:6px 10px;font-family:monospace;font-size:13px;color:var(--gold);letter-spacing:.06em;word-break:break-all"></code>
+          <button onclick="copySettingsCode()" style="flex-shrink:0;background:rgba(200,150,10,.12);border:1px solid rgba(200,150,10,.3);border-radius:4px;padding:6px 10px;color:var(--gold);font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif">📋 Kopyala</button>
+        </div>
+        <div class="settings-hint">Bu kodu arkadaşına ver — o da giriş ekranında "Haritaya Katıl" ile kodu girince aynı haritayı görür.</div>
       </div>
     </div>
     <div class="settings-section">
